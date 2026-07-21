@@ -437,6 +437,23 @@ def migrate_merge_requests(
                 number = pr["number"]
                 real_pr_count += 1
 
+                pr_labels = mr.get("labels") or []
+                ms_title = (mr.get("milestone") or {}).get("title")
+                ms_id = milestone_map.get(ms_title) if ms_title else None
+
+                if pr_labels or ms_id:
+                    update_payload = {}
+                    if pr_labels:
+                        update_payload["labels"] = pr_labels
+                    if ms_id:
+                        update_payload["milestone"] = ms_id
+                    try:
+                        gh.patch(f"issues/{number}", update_payload)
+                    except ApiError as update_err:
+                        warn(
+                            f"Could not apply labels/milestone to PR #{number}: {update_err}"
+                        )
+
                 if mr.get("state") == "merged":
                     try:
                         gh.put(f"pulls/{number}/merge", {"merge_method": "merge"})
@@ -448,7 +465,12 @@ def migrate_merge_requests(
                     gh.patch(f"pulls/{number}", {"state": "closed"})
 
             except ApiError as e:
-                warn(f"Could not open PR for GitLab MR !{iid}, falling back: {e}")
+                if e.status == 422 and "No commits between" in e.body:
+                    info(
+                        f"  [{i}/{len(mrs)}] MR !{iid} is already fully merged into {target} (no diff). Falling back..."
+                    )
+                else:
+                    warn(f"Could not open PR for GitLab MR !{iid}, falling back: {e}")
                 branch_present = False
 
         if not branch_present:
